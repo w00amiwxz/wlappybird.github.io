@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flappy Bird W: Fullscreen Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'flappy-bird-w-v2';
+
+        // Глобальный объект для доступа из обычного скрипта
+        window.gameDB = { 
+            db, auth, appId, collection, query, getDocs, doc, setDoc, getDoc, 
+            signInAnonymously, signInWithCustomToken, onAuthStateChanged 
+        };
+        window.dispatchEvent(new Event('gameDBReady'));
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Press Start 2P', cursive; touch-action: manipulation; }
+        #game-container { position: relative; width: 100vw; height: 100vh; overflow: hidden; transition: transform 0.05s ease-out; }
+        canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+        #ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; text-shadow: 3px 3px 0px rgba(0,0,0,0.8); z-index: 20; }
+        .pixel-btn { pointer-events: auto; background: #FF9F43; border: 4px solid #fff; box-shadow: 4px 4px 0px #EE5253; padding: 12px 20px; font-size: 10px; cursor: pointer; color: white; margin: 8px; transition: all 0.1s; text-transform: uppercase; border-radius: 4px; }
+        .pixel-btn:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0px #EE5253; }
+        .panel { background: rgba(255, 255, 255, 0.95); border: 6px solid #FF9F43; padding: 20px; pointer-events: auto; color: #2c3e50; text-shadow: none; width: 90%; max-width: 360px; max-height: 80vh; overflow-y: auto; border-radius: 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.7); }
+        .hidden { display: none !important; }
+        .leader-item { display: flex; justify-content: space-between; font-size: 8px; padding: 12px; border-bottom: 2px solid #eee; align-items: center; }
+        .skin-item { border: 4px solid #eee; padding: 12px; text-align: center; cursor: pointer; border-radius: 12px; transition: 0.2s; background: white; }
+        .skin-item.selected { border-color: #FF9F43; background: #fff5eb; transform: scale(1.05); }
+        #score-display { position: absolute; top: 10%; font-size: 64px; z-index: 30; filter: drop-shadow(4px 4px 0px rgba(0,0,0,0.5)); transition: transform 0.1s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .score-bump { transform: scale(1.3); }
+        input { font-family: 'Press Start 2P', cursive; font-size: 10px; padding: 10px; border: 4px solid #FF9F43; border-radius: 8px; width: 100%; margin-bottom: 10px; outline: none; }
+        #flash-effect { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: white; opacity: 0; pointer-events: none; z-index: 50; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="flash-effect"></div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui-overlay">
+        <div id="score-display" class="hidden">0</div>
+        
+        <div id="start-menu" class="text-center">
+            <h1 class="text-2xl md:text-3xl mb-6 tracking-tighter">FLAPPY<br><span style="color: #FF9F43">W-MASTER</span></h1>
+            <div class="mb-6 bg-black/60 p-4 rounded-2xl backdrop-blur-md pointer-events-auto border border-white/20">
+                <p class="text-[9px] mb-2 opacity-80">PLAYER: <span id="user-nickname" class="text-yellow-400">CONNECTING...</span></p>
+                <p class="text-[12px] mb-2"><span style="color:#f1c40f">●</span> <span id="total-coins">0</span> wCoins</p>
+                <p id="menu-best" class="text-[10px] text-orange-400">BEST: 0</p>
+            </div>
+            
+            <button id="btn-start" class="pixel-btn text-xl py-5 px-12" onclick="startGame()">START</button>
+            <div class="grid grid-cols-2 gap-3 mt-6">
+                <button class="pixel-btn bg-blue-600" onclick="openPanel('shop')">SKINS</button>
+                <button class="pixel-btn bg-purple-600" onclick="openPanel('leaders')">TOP</button>
+                <button class="pixel-btn bg-emerald-600" onclick="openPanel('settings')">MODES</button>
+                <button class="pixel-btn bg-indigo-600" onclick="openPanel('atmos')">WORLD</button>
+            </div>
+        </div>
+
+        <div id="atmos-panel" class="panel hidden">
+            <h2 class="text-center mb-6 text-sm">CHOOSE WORLD</h2>
+            <div class="grid grid-cols-2 gap-3 mb-6">
+                <button class="atmos-btn p-3 border-2 rounded-xl text-[8px]" onclick="setAtmos('day')">DAYLIGHT</button>
+                <button class="atmos-btn p-3 border-2 rounded-xl text-[8px]" onclick="setAtmos('night')">MIDNIGHT</button>
+                <button class="atmos-btn p-3 border-2 rounded-xl text-[8px]" onclick="setAtmos('sunset')">SUNSET</button>
+                <button class="atmos-btn p-3 border-2 rounded-xl text-[8px]" onclick="setAtmos('space')">CYBER</button>
+            </div>
+            <button class="pixel-btn w-full bg-gray-500" onclick="closePanels()">BACK</button>
+        </div>
+
+        <div id="shop-panel" class="panel hidden">
+            <h2 class="text-center mb-6 text-sm">BIRD SHOP</h2>
+            <div id="skin-grid" class="grid grid-cols-2 gap-3 mb-6"></div>
+            <button class="pixel-btn w-full bg-gray-500" onclick="closePanels()">BACK</button>
+        </div>
+
+        <div id="leaders-panel" class="panel hidden">
+            <h2 class="text-center mb-6 text-sm">GLOBAL RANK</h2>
+            <div id="leaders-list" class="space-y-1"></div>
+            <button class="pixel-btn w-full mt-6 bg-gray-500" onclick="closePanels()">BACK</button>
+        </div>
+
+        <div id="settings-panel" class="panel hidden">
+            <h2 class="text-center mb-4 text-sm">PROFILE & MODE</h2>
+            <div class="mb-6 p-4 bg-gray-100 rounded-xl">
+                <p class="text-[8px] mb-2 uppercase opacity-60">Your Nickname:</p>
+                <input type="text" id="nick-input" maxlength="12" placeholder="Enter name...">
+                <button class="pixel-btn w-full m-0 text-[8px]" onclick="updateNickname()">SAVE NICKNAME</button>
+            </div>
+            <h3 class="text-center mb-3 text-[10px]">DIFFICULTY:</h3>
+            <div id="diff-list" class="space-y-2"></div>
+            <button class="pixel-btn w-full mt-6 bg-gray-500" onclick="closePanels()">BACK</button>
+        </div>
+
+        <div id="game-over" class="text-center hidden">
+            <h2 class="text-4xl mb-6 italic" style="color: #EE5253; -webkit-text-stroke: 2px white;">CRASHED!</h2>
+            <div class="panel mx-auto mb-6 scale-110">
+                <p id="final-score" class="text-lg mb-2">SCORE: 0</p>
+                <p id="earned-coins" class="text-[12px] text-yellow-600 mb-2 font-bold">+0 wCoins</p>
+                <p id="new-record-msg" class="text-[10px] text-green-600 animate-bounce hidden">NEW RECORD!</p>
+            </div>
+            <button class="pixel-btn text-xl" onclick="startGame()">RETRY</button>
+            <button class="pixel-btn bg-gray-500" onclick="showStartMenu()">MENU</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- ЗВУКИ ---
+    const SoundEngine = {
+        ctx: null,
+        init() { if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)(); },
+        playJump() {
+            if (!this.ctx) return;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(600, this.ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.05, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(); osc.stop(this.ctx.currentTime + 0.1);
+        },
+        playScore() {
+            if (!this.ctx) return;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(800, this.ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1200, this.ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.05, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(); osc.stop(this.ctx.currentTime + 0.2);
+        },
+        playCrash() {
+            if (!this.ctx) return;
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(100, this.ctx.currentTime);
+            osc.frequency.linearRampToValueAtTime(20, this.ctx.currentTime + 0.3);
+            gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.3);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(); osc.stop(this.ctx.currentTime + 0.3);
+        }
+    };
+
+    // --- ЭФФЕКТЫ ---
+    const VisualEffects = {
+        shake(intensity = 10, duration = 200) {
+            const container = document.getElementById('game-container');
+            const startTime = Date.now();
+            const interval = setInterval(() => {
+                const elapsed = Date.now() - startTime;
+                if (elapsed > duration) {
+                    container.style.transform = 'translate(0, 0)';
+                    clearInterval(interval);
+                    return;
+                }
+                const x = (Math.random() - 0.5) * intensity;
+                const y = (Math.random() - 0.5) * intensity;
+                container.style.transform = `translate(${x}px, ${y}px)`;
+            }, 16);
+        },
+        flash(opacity = 0.3, duration = 150) {
+            const el = document.getElementById('flash-effect');
+            el.style.transition = 'none';
+            el.style.opacity = opacity;
+            setTimeout(() => {
+                el.style.transition = `opacity ${duration}ms ease-out`;
+                el.style.opacity = '0';
+            }, 50);
+        },
+        bumpScore() {
+            const el = document.getElementById('score-display');
+            el.classList.add('score-bump');
+            setTimeout(() => el.classList.remove('score-bump'), 100);
+        }
+    };
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const NICK_ADJECTIVES = ["SUPER", "PRO", "WIND", "FLY", "COOL", "MEGA", "SWIFT", "NEON", "SKY", "GOLD"];
+    const NICK_NOUNS = ["BIRD", "PILOT", "MASTER", "RIDER", "DASH", "FLAP", "WING", "CORE", "BEAK", "GLIDER"];
+    function generateRandomNick() {
+        return NICK_ADJECTIVES[Math.floor(Math.random() * NICK_ADJECTIVES.length)] + " " + NICK_NOUNS[Math.floor(Math.random() * NICK_NOUNS.length)];
+    }
+
+    const SKINS = {
+        classic: { name: "ORIGINAL", color: "#f7d01b", price: 0 },
+        ninja: { name: "SHADOW", color: "#2d3436", price: 100 },
+        gold: { name: "ROYAL", color: "#fdcb6e", price: 300 },
+        neon: { name: "CYBER", color: "#00ffcc", price: 700 },
+        phoenix: { name: "PHOENIX", color: "#ff4d4d", price: 1500 }
+    };
+
+    const ATMOS = {
+        day: { bg: "#4ec0ca", pipe: "#73bf2e", pipeDark: "#558022", clouds: "white", ground: "#ded895" },
+        night: { bg: "#2c3e50", pipe: "#2d3436", pipeDark: "#000000", clouds: "#34495e", ground: "#1a1a1a" },
+        sunset: { bg: "#ff793f", pipe: "#cd6133", pipeDark: "#843919", clouds: "#ffb142", ground: "#cc8e35" },
+        space: { bg: "#0c2461", pipe: "#6c5ce7", pipeDark: "#2d3436", clouds: "rgba(255,255,255,0.1)", ground: "#0a3d62" }
+    };
+
+    const difficulties = [
+        { id: "noob", name: "CASUAL", speed: 2, gap: 180, gravity: 0.18, jump: -4.5, spawnRate: 110 },
+        { id: "pro", name: "MASTER", speed: 3, gap: 140, gravity: 0.22, jump: -5.0, spawnRate: 90 },
+        { id: "legend", name: "ELITE", speed: 4, gap: 110, gravity: 0.28, jump: -5.5, spawnRate: 75 },
+        { id: "insane", name: "W-GOD", speed: 5.5, gap: 100, gravity: 0.35, jump: -6.5, spawnRate: 60 }
+    ];
+
+    let gameState = {
+        nickname: "",
+        coins: 0,
+        unlockedSkins: ['classic'],
+        currentSkin: 'classic',
+        currentAtmos: 'day',
+        highScores: { noob:0, pro:0, legend:0, insane:0 },
+        diffIndex: 1,
+        user: null
+    };
+
+    const STORAGE_KEY = 'flappy_w_master_v2';
+
+    function saveToLocal() {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+            nickname: gameState.nickname,
+            coins: gameState.coins,
+            unlockedSkins: gameState.unlockedSkins,
+            currentSkin: gameState.currentSkin,
+            currentAtmos: gameState.currentAtmos,
+            highScores: gameState.highScores,
+            diffIndex: gameState.diffIndex
+        }));
+    }
+
+    function loadFromLocal() {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+            try {
+                const data = JSON.parse(saved);
+                Object.assign(gameState, data);
+                return true;
+            } catch (e) { console.error(e); }
+        }
+        return false;
+    }
+
+    // --- FIRESTORE КОРРЕКТИРОВКА ---
+    async function initCloud() {
+        loadFromLocal();
+        updateUIFromState();
+
+        if (!window.gameDB) return;
+        const { auth, db, appId, doc, getDoc, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = window.gameDB;
+
+        // Ждем авторизации
+        const initAuth = async () => {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+                await signInAnonymously(auth);
+            }
+        };
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                gameState.user = user;
+                try {
+                    // Используем путь по правилу 1: /artifacts/{appId}/users/{userId}/{collectionName}
+                    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile');
+                    const snap = await getDoc(userDocRef);
+                    
+                    if (snap.exists()) {
+                        const d = snap.data();
+                        gameState.nickname = d.nickname || gameState.nickname;
+                        gameState.coins = d.coins ?? gameState.coins;
+                        gameState.highScores = { ...gameState.highScores, ...(d.highScores || {}) };
+                        gameState.unlockedSkins = d.unlockedSkins || gameState.unlockedSkins;
+                        gameState.currentSkin = d.currentSkin || gameState.currentSkin;
+                        gameState.currentAtmos = d.currentAtmos || gameState.currentAtmos;
+                        saveToLocal();
+                    } else if (!gameState.nickname) {
+                        gameState.nickname = generateRandomNick();
+                    }
+                    updateUIFromState();
+                } catch (e) { console.error("Cloud load error:", e); }
+            }
+        });
+
+        await initAuth();
+    }
+
+    async function saveCloud() {
+        saveToLocal();
+        if (!gameState.user || !window.gameDB) return;
+        const { db, appId, doc, setDoc } = window.gameDB;
+        const d = difficulties[gameState.diffIndex];
+        
+        try {
+            // Личные данные
+            await setDoc(doc(db, 'artifacts', appId, 'users', gameState.user.uid, 'settings', 'profile'), {
+                nickname: gameState.nickname,
+                coins: gameState.coins,
+                highScores: gameState.highScores,
+                unlockedSkins: gameState.unlockedSkins,
+                currentSkin: gameState.currentSkin,
+                currentAtmos: gameState.currentAtmos,
+                lastUpdate: Date.now()
+            }, { merge: true });
+
+            // Публичный топ
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leaderboard', gameState.user.uid), {
+                uid: gameState.user.uid, 
+                nickname: gameState.nickname,
+                score: gameState.highScores[d.id] || 0, 
+                diff: d.name,
+                time: Date.now()
+            }, { merge: true });
+        } catch (e) { console.error("Cloud save error:", e); }
+    }
+
+    function updateUIFromState() {
+        const nickEl = document.getElementById('user-nickname');
+        if (nickEl) nickEl.textContent = gameState.nickname || "PLAYER";
+        const inputEl = document.getElementById('nick-input');
+        if (inputEl) inputEl.value = gameState.nickname || "";
+        renderMainUI();
+    }
+
+    function updateNickname() {
+        const val = document.getElementById('nick-input').value.trim().toUpperCase();
+        if (val.length >= 2) {
+            gameState.nickname = val;
+            updateUIFromState();
+            saveCloud();
+        }
+    }
+
+    let bird, pipes, particles, score, gameActive, frameCount = 0;
+
+    class Particle {
+        constructor(x, y, color) {
+            this.x = x; this.y = y;
+            this.vx = Math.random() * 4 - 2; this.vy = Math.random() * 4 - 2;
+            this.size = Math.random() * 5 + 2; this.life = 1.0; this.color = color;
+        }
+        update() { this.x += this.vx; this.y += this.vy; this.life -= 0.02; }
+        draw() {
+            ctx.globalAlpha = this.life; ctx.fillStyle = this.color;
+            ctx.beginPath(); ctx.roundRect(this.x, this.y, this.size, this.size, 2); ctx.fill();
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    class Bird {
+        constructor() {
+            const d = difficulties[gameState.diffIndex];
+            this.x = width * 0.25; this.y = height * 0.4; this.v = 0;
+            this.gravity = d.gravity; this.jumpPower = d.jump;
+            this.skin = SKINS[gameState.currentSkin];
+            this.w = 34; this.h = 24; this.angle = 0;
+        }
+        draw() {
+            ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(this.angle);
+            ctx.strokeStyle = "#000"; ctx.lineWidth = 2.5; ctx.fillStyle = this.skin.color;
+            ctx.beginPath(); ctx.roundRect(-this.w/2, -this.h/2, this.w, this.h, 6); ctx.fill(); ctx.stroke();
+            let wingY = Math.sin(frameCount * 0.25) * 8;
+            ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.roundRect(-12, wingY-4, 16, 10, 4); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(8, -4, 6, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#000"; ctx.beginPath(); ctx.arc(10, -4, 2.5, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = "#f39c12"; ctx.beginPath(); ctx.moveTo(this.w/2-2, -2); ctx.lineTo(this.w/2+10, 3); ctx.lineTo(this.w/2-2, 8); ctx.fill(); ctx.stroke();
+            ctx.restore();
+        }
+        update() {
+            this.v += this.gravity; this.y += this.v;
+            this.angle = Math.min(Math.PI/3, Math.max(-Math.PI/6, this.v * 0.1));
+            if (this.y > height - 40 || this.y < 5) endGame();
+        }
+        jump() { SoundEngine.playJump(); this.v = this.jumpPower; for(let i=0; i<5; i++) particles.push(new Particle(this.x-10, this.y, "#fff")); }
+    }
+
+    class Pipe {
+        constructor() {
+            const d = difficulties[gameState.diffIndex];
+            const a = ATMOS[gameState.currentAtmos];
+            this.gap = d.gap; this.w = 60; this.x = width;
+            this.top = Math.random() * (height - 200 - this.gap) + 60;
+            this.speed = d.speed; this.passed = false;
+            this.color = a.pipe; this.dark = a.pipeDark;
+        }
+        draw() {
+            const drawP = (x, y, w, h, capTop) => {
+                const g = ctx.createLinearGradient(x, y, x+w, y);
+                g.addColorStop(0, this.dark); g.addColorStop(0.3, this.color); g.addColorStop(1, this.dark);
+                ctx.fillStyle = g; ctx.strokeStyle = "#000"; ctx.lineWidth = 3;
+                ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
+                let cy = capTop ? y+h-26 : y;
+                ctx.fillRect(x-5, cy, w+10, 26); ctx.strokeRect(x-5, cy, w+10, 26);
+            };
+            drawP(this.x, 0, this.w, this.top, true);
+            drawP(this.x, this.top + this.gap, this.w, height - (this.top + this.gap), false);
+        }
+        update() { this.x -= this.speed; }
+    }
+
+    function startGame() {
+        SoundEngine.init(); resize();
+        bird = new Bird(); pipes = []; particles = []; score = 0; gameActive = true; frameCount = 0;
+        document.getElementById('start-menu').classList.add('hidden');
+        document.getElementById('game-over').classList.add('hidden');
+        document.getElementById('score-display').classList.remove('hidden');
+        document.getElementById('score-display').textContent = "0";
+        loop();
+    }
+
+    function endGame() {
+        if (!gameActive) return;
+        gameActive = false;
+        SoundEngine.playCrash();
+        VisualEffects.shake(15, 300);
+        const d = difficulties[gameState.diffIndex];
+        const isNewRecord = score > (gameState.highScores[d.id] || 0);
+        gameState.coins += score;
+        if (isNewRecord) gameState.highScores[d.id] = score;
+        
+        document.getElementById('final-score').textContent = "SCORE: " + score;
+        document.getElementById('earned-coins').textContent = "+" + score + " wCoins";
+        document.getElementById('new-record-msg').classList.toggle('hidden', !isNewRecord);
+        document.getElementById('game-over').classList.remove('hidden');
+        saveCloud();
+    }
+
+    function loop() {
+        if (!gameActive) return;
+        const a = ATMOS[gameState.currentAtmos];
+        ctx.fillStyle = a.bg; ctx.fillRect(0,0,width, height);
+        
+        ctx.fillStyle = a.clouds; ctx.globalAlpha = 0.2;
+        ctx.fillRect((width * 0.1) - (frameCount*0.5)%width, height * 0.2, 120, 25);
+        ctx.fillRect((width * 0.6) - (frameCount*0.3)%width, height * 0.1, 150, 35);
+        ctx.globalAlpha = 1;
+
+        ctx.fillStyle = a.ground; ctx.fillRect(0, height-30, width, 30);
+        ctx.strokeStyle = "#000"; ctx.lineWidth = 4; ctx.strokeRect(-10, height-30, width+20, 40);
+
+        const d = difficulties[gameState.diffIndex];
+        if (frameCount % Math.floor(d.spawnRate) === 0) pipes.push(new Pipe());
+        
+        for (let i = pipes.length-1; i >= 0; i--) {
+            let p = pipes[i]; p.update(); p.draw();
+            if (bird.x + 14 > p.x && bird.x - 14 < p.x + p.w) {
+                if (bird.y - 10 < p.top || bird.y + 10 > p.top + d.gap) endGame();
+            }
+            if (p.x + p.w < bird.x && !p.passed) { 
+                p.passed = true; score++; SoundEngine.playScore();
+                VisualEffects.flash(0.15, 100);
+                VisualEffects.bumpScore();
+                document.getElementById('score-display').textContent = score;
+            }
+            if (p.x + p.w < -100) pipes.splice(i, 1);
+        }
+        
+        for (let i = particles.length-1; i >= 0; i--) {
+            particles[i].update(); particles[i].draw();
+            if(particles[i].life <= 0) particles.splice(i, 1);
+        }
+
+        bird.update(); bird.draw();
+        frameCount++; requestAnimationFrame(loop);
+    }
+
+    function openPanel(id) {
+        document.getElementById('start-menu').classList.add('hidden');
+        document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
+        document.getElementById(`${id}-panel`).classList.remove('hidden');
+        if (id === 'shop') renderShop();
+        if (id === 'leaders') loadLeaders();
+        if (id === 'settings') renderSettings();
+    }
+
+    function closePanels() {
+        document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
+        document.getElementById('start-menu').classList.remove('hidden');
+        renderMainUI();
+    }
+
+    function setAtmos(key) { gameState.currentAtmos = key; saveCloud(); closePanels(); }
+
+    function renderShop() {
+        const grid = document.getElementById('skin-grid'); grid.innerHTML = '';
+        Object.keys(SKINS).forEach(key => {
+            const s = SKINS[key];
+            const unlocked = gameState.unlockedSkins.includes(key);
+            const selected = gameState.currentSkin === key;
+            const div = document.createElement('div');
+            div.className = `skin-item ${selected ? 'selected' : ''} ${!unlocked ? 'opacity-60' : ''}`;
+            div.innerHTML = `
+                <div style="background:${s.color}; width:40px; height:25px; margin:0 auto 8px; border:2px solid #000; border-radius:4px"></div>
+                <p class="text-[7px] font-bold mb-1">${s.name}</p>
+                <p class="text-[7px] text-orange-600">${unlocked ? (selected ? 'ACTIVE' : 'SELECT') : s.price + ' W'}</p>
+            `;
+            div.onclick = () => {
+                if(unlocked) gameState.currentSkin = key;
+                else if(gameState.coins >= s.price) {
+                    gameState.coins -= s.price; gameState.unlockedSkins.push(key); gameState.currentSkin = key;
+                }
+                saveCloud(); renderShop(); renderMainUI();
+            };
+            grid.appendChild(div);
+        });
+    }
+
+    function renderSettings() {
+        const list = document.getElementById('diff-list');
+        list.innerHTML = difficulties.map((d, i) => `
+            <button class="pixel-btn w-full ${gameState.diffIndex === i ? 'bg-orange-600' : 'bg-gray-400'}" 
+                    onclick="gameState.diffIndex=${i}; saveCloud(); closePanels()">
+                ${d.name} ${gameState.diffIndex === i ? '✓' : ''}
+            </button>
+        `).join('');
+    }
+
+    async function loadLeaders() {
+        if (!window.gameDB) return;
+        const { db, appId, collection, query, getDocs } = window.gameDB;
+        const list = document.getElementById('leaders-list');
+        list.innerHTML = '<p class="text-center text-[8px]">LOADING...</p>';
+        try {
+            const snap = await getDocs(query(collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard')));
+            let players = []; snap.forEach(d => players.push(d.data()));
+            players.sort((a,b) => b.score - a.score);
+            list.innerHTML = players.slice(0, 10).map((p, i) => `
+                <div class="leader-item ${p.uid === gameState.user?.uid ? 'bg-yellow-100 rounded-lg' : ''}">
+                    <span class="truncate max-w-[150px]">${i+1}. ${p.nickname || 'PLAYER'}</span>
+                    <span class="font-bold shrink-0">${p.score} <small class="text-[6px] opacity-60">${p.diff || '??'}</small></span>
+                </div>
+            `).join('');
+        } catch(e) { list.innerHTML = "TOP UNAVAILABLE"; }
+    }
+
+    function renderMainUI() {
+        const coinsEl = document.getElementById('total-coins');
+        if (coinsEl) coinsEl.textContent = gameState.coins;
+        const d = difficulties[gameState.diffIndex];
+        const bestEl = document.getElementById('menu-best');
+        if (bestEl) bestEl.textContent = "BEST (" + d.name + "): " + (gameState.highScores[d.id] || 0);
+    }
+
+    function showStartMenu() {
+        document.getElementById('game-over').classList.add('hidden');
+        document.getElementById('start-menu').classList.remove('hidden');
+        document.getElementById('score-display').classList.add('hidden');
+        renderMainUI();
+    }
+
+    window.addEventListener('keydown', e => { if((e.code==='Space'||e.code==='ArrowUp') && gameActive) bird.jump(); });
+    window.addEventListener('mousedown', (e) => { if(gameActive && e.target.tagName !== 'BUTTON') bird.jump(); });
+    window.addEventListener('touchstart', e => { if(gameActive && e.target.tagName !== 'BUTTON') { bird.jump(); e.preventDefault(); } }, {passive:false});
+    window.addEventListener('gameDBReady', initCloud);
+</script>
+</body>
+</html>
